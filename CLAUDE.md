@@ -22,7 +22,8 @@ Browser (plain HTML/JS)  ->  FastAPI (Python)  ->  C++ engine (focusflow.dll, ca
 - `engine/src/c_api.cpp`     `ff_predict` and `ff_plan`: flat arrays only, because Python cannot pass vectors/strings.
                              With fewer than 10 history rows it skips the comparison and uses the category ratio.
 - `engine/old/`              earlier class-based version, kept untouched, not built
-- Task value (computed in Python, not C++): `priority * 10 + urgency`, urgency = 20 if due in <=1 day, 10 if <=3, else 0.
+- Task value (computed in Python, `backend/scoring.py`, not C++): `priority * 10 + urgency`, urgency = `30 / (1 + days_left)`
+  (overdue counts as due today, no deadline = 0), so the value rises smoothly as the deadline nears.
 
 ## Build and test (PowerShell, from `engine/`)
 `.\build.ps1` runs `tests/test_engine.cpp`, then builds `build/focusflow.dll`.
