@@ -79,6 +79,7 @@ static void test_planner() {
     check(choose(minutes, values, 0).empty(), "planner: zero budget picks nothing");
     check(choose({}, {}, 50).empty(), "planner: no tasks picks nothing");
     check(choose({1, 2}, {5.0}, 10).empty(), "planner: mismatched lists pick nothing");
+    check(choose({-5, 2}, {5.0, 6.0}, 10).empty(), "planner: negative minutes pick nothing (and do not crash)");
 }
 
 int main() {

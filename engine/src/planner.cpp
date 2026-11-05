@@ -8,6 +8,11 @@ vector<int> choose(const vector<int>& minutes, const vector<double>& values, int
 
     int n = minutes.size();
 
+    // A negative duration would make "t - minutes" point past the end of the table.
+    for (int i = 0; i < n; i++) {
+        if (minutes[i] < 0) return chosen;
+    }
+
     // dp[i][t] = best total value using only the first i tasks with t minutes available.
     vector<vector<double>> dp(n + 1, vector<double>(budget + 1, 0));
 

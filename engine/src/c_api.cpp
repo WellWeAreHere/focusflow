@@ -53,6 +53,9 @@ FF_EXPORT int ff_predict(const int* hist_cat, const double* hist_guessed, const 
 // Returns how many tasks were chosen (their positions are written to out_chosen), or -1 on bad arguments.
 FF_EXPORT int ff_plan(const int* minutes, const double* values, int n, int budget, int* out_chosen) {
     if (n < 0 || (n > 0 && (minutes == nullptr || values == nullptr || out_chosen == nullptr))) return -1;
+    for (int i = 0; i < n; i++) {
+        if (minutes[i] < 0) return -1;   // tell Python the input is bad instead of silently planning nothing
+    }
 
     vector<int> m(minutes, minutes + n);
     vector<double> v(values, values + n);
