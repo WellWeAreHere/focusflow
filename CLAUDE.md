@@ -32,16 +32,25 @@ The DLL must be linked with `-static`, otherwise Python fails to load it (it nee
 
 ## Status
 Done: C++ engine with tests, DLL bridge, `backend/` (ctypes wrapper `engine.py`, SQLite `db.py`, `scoring.py`,
-FastAPI `main.py`), one-page frontend in `frontend/` (served by FastAPI), 32 API tests in `backend/test_api.py`.
+FastAPI `main.py`), one-page frontend in `frontend/` (served by FastAPI), 42 API tests in `backend/test_api.py`.
 Features beyond the original plan:
 - Partial progress: `POST /tasks/{id}/sessions` takes minutes spent and % gained. Below 100% the task stays open;
   the sitting is stored as unfinished. History row = (guessed, spent * 100 / % gained), so the engine is unchanged.
   `/plan` only charges the remaining part of a half-done task.
+- Spare-minute filling: `backend/fill.py` (Python, after the knapsack). The gap left by the whole tasks gets a slice of the left-out task with the
+  best value per minute (percent of the WHOLE task, rounded down; min gap 5 min, min slice 5%). `/plan` returns it as `partial`; the UI shows a
+  "part N%" row last in the plan. A slice does not count in `total_value`.
 - Daily recurring tasks: templates in `recurring`; `db.spawn_recurring` makes today's copy lazily (no scheduler)
   whenever tasks are listed or planned. Missed days give one fresh copy; the older unfinished one is marked skipped.
 Steps 5-6 are done too: `simulator/simulate.py` (simulated users; results in `simulator/results.md`),
 `benchmark/` (pure-Python port + timings, checked equal to C++), `.github/workflows/ci.yml` (+ `engine/build.sh` for Linux),
 `README.md` with a screenshot in `docs/`. The frontend layout was checked by screenshot (desktop and 500px wide).
+Frontend (4 columns): add task + daily tasks | plan form + all tasks (not in plan) | "Today's plan" | "Working on" stopwatch.
+Make plan moves the chosen tasks to the plan column; tasks drag between columns 2 and 3 and reorder within the plan, with a blue drop line (HTML5 drag and drop, plus arrow buttons);
+one-line task rows; plan kept in localStorage. Stopwatch
+(Start/Pause/Resume/Stop/Finish; Stop/Finish then ask "% of the task finished" and POST the session). Timer state is kept in
+localStorage; its logic is in `frontend/timer.js`, tested with `node frontend/test_timer.js`. The whole click-through was
+verified by driving headless Edge over the DevTools protocol (44 + 14 checks, drag events were synthetic, not a real mouse), but that script is not in the repo.
 Quote only the SIMULATED numbers, and say they are simulated. In the control group (already-accurate guessers) FocusFlow does
 not help and is slightly worse with under ~40 sessions of history: say that too.
 Remaining ideas: show the user's own guess until there is enough history; push and confirm CI is green on GitHub (the Linux

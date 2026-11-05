@@ -31,3 +31,7 @@ jobs:
       - name: C++ vs Python equivalence tests
         run: python -m pytest -q
         working-directory: benchmark
+
+      # Node comes preinstalled on the runner. Tests the stopwatch maths used by the page.
+      - name: Stopwatch (JavaScript) tests
+        run: node frontend/test_timer.js

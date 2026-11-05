@@ -3,9 +3,18 @@
 A time-budgeted task planner. You say **"I have 60 minutes"**; it picks the set of tasks that fits.
 It also learns how long you *really* take compared with your own guesses, so plans stay realistic.
 
-![FocusFlow planning a 60-minute slot](docs/screenshot-plan.png)
+Four columns: add tasks and daily tasks | plan form and all tasks | today's plan | the task you are working on
+(with its stopwatch). Each task is one compact line. **Make plan** moves the chosen tasks into the plan column, and you can
+drag tasks between "All tasks" and "Today's plan" (or use the arrow buttons) and drag them up or down inside the plan to set the order; the plan shows
+its total minutes against your time and turns red if you go over.
 
-*(Screenshot uses simulated demo data from `simulator/seed_demo.py`.)*
+![FocusFlow: plan for a 100-minute slot, with a part-task filling the last minutes](docs/screenshot-plan.png)
+
+After Stop or Finish it asks how much of the task you got done, and the answer trains the predictor:
+
+![FocusFlow: asking for progress after the stopwatch](docs/screenshot-timer.png)
+
+*(Screenshots use simulated demo data from `simulator/seed_demo.py`.)*
 
 ## How it works
 
@@ -15,8 +24,9 @@ Browser (plain HTML/JS)  ->  FastAPI (Python)  ->  ctypes  ->  C++ engine (share
                                SQLite
 ```
 
-1. **Log history.** When you work on a task you record minutes spent and the % you finished. Stopped halfway?
-   The task stays on your list at its new %, and the sitting is stored as unfinished.
+1. **Work with the stopwatch.** Press Start on a task (from the plan or the task list) and use Pause / Resume / Stop / Finish.
+   The timer survives a page refresh. When you stop it asks what share of the task you finished in that sitting.
+   Stopped halfway? The task stays on your list at its new %, and the sitting is stored as unfinished.
    A sitting that finished P% in M minutes counts as evidence that the whole task takes `M * 100 / P` minutes.
 2. **Predict real time** (`engine/src/predictors.cpp`, `selector.cpp`). Three kinds of predictor:
    your raw guess, a per-category ratio (`actual / guessed`), and a weighted k-nearest-neighbours predictor
@@ -26,6 +36,8 @@ Browser (plain HTML/JS)  ->  FastAPI (Python)  ->  ctypes  ->  C++ engine (share
 3. **Score each task** (`backend/scoring.py`). `value = priority * 10 + 30 / (1 + days_left)`, so the closer the deadline, the more a task is worth.
 4. **Plan** (`engine/src/planner.cpp`). A 0/1 knapsack (dynamic programming, full table so the chosen tasks can be recovered)
    picks the set with the most total value that fits in your minutes. Only the *remaining* part of a half-done task costs time.
+   The knapsack only takes whole tasks, so a gap is usually left. `backend/fill.py` fills it with a slice of the left-out task
+   with the best value per minute ("do about 40% of it"), if the gap is at least 5 minutes and the slice at least 5% of the task.
 5. **Daily tasks** repeat automatically: a template makes today's copy the first time the app is used each day (no background scheduler).
 
 The C++ code is compiled into a shared library (`focusflow.dll` on Windows, `libfocusflow.so` on Linux) and called from
@@ -35,6 +47,14 @@ that take flat arrays (`ff_predict`, `ff_plan`).
 ## Run it
 
 Needs: g++ (C++17), Python 3.11+, and `pip install -r backend/requirements.txt`.
+
+Windows, one command from the repo root (builds the engine the first time, starts the server, opens the browser):
+
+```powershell
+.\run.ps1
+```
+
+Or step by step:
 
 ```powershell
 # Windows (from engine/): runs the C++ tests, then builds build\focusflow.dll
@@ -58,10 +78,12 @@ Open `http://127.0.0.1:8000/?plan=60` to see a finished plan straight away.
 | What | Command | Tests |
 |---|---|---|
 | C++ engine | `engine\build.ps1` or `bash engine/build.sh` | unit tests (predictors, selector, planner) |
-| API + database | `python -m pytest -q` in `backend/` | 32 |
+| API + database | `python -m pytest -q` in `backend/` | 42 |
+| Stopwatch logic (JS) | `node frontend/test_timer.js` | pause/resume/stop maths, clock text |
 | C++ vs Python port agree | `python -m pytest -q` in `benchmark/` | 2 |
 
-GitHub Actions (`.github/workflows/ci.yml`) runs all three on every push.
+GitHub Actions (`.github/workflows/ci.yml`) runs all four on every push. The click-through of the page itself
+(plan, Start, Pause, Resume, reload, Stop, save, Finish, Discard) was checked by hand in a real browser, not in CI.
 
 ## Results
 
@@ -113,7 +135,7 @@ engine matters when history or task counts grow large, and it was a deliberate c
 ```
 engine/       C++ engine: src/ (predictors, selector, planner, c_api), tests/, build scripts, old/ (earlier version, unused)
 backend/      engine.py (ctypes bridge), db.py (SQLite), scoring.py, main.py (FastAPI), test_api.py
-frontend/     index.html, style.css, app.js (no framework)
+frontend/     index.html, style.css, app.js (page), timer.js (stopwatch logic) + test_timer.js (no framework)
 simulator/    simulate.py (results), seed_demo.py (demo data)
 benchmark/    py_engine.py (Python port), bench.py, test_equivalence.py
 learn/        the step-by-step teaching programs that led to the engine

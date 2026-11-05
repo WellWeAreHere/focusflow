@@ -1,6 +1,6 @@
 <!DOCTYPE html>
-<!-- HTML describes the STRUCTURE of the page: headings, forms, buttons. Nothing happens here by
-     itself. style.css decides how it looks, app.js decides what it does. -->
+<!-- HTML describes the STRUCTURE of the page. style.css decides how it looks; timer.js holds the
+     stopwatch logic; app.js decides what happens when you click. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -17,56 +17,81 @@
   <!-- Errors and confirmations from the server show up here. -->
   <div id="message" class="message" hidden></div>
 
-  <main>
-    <section>
-      <h2>Plan my time</h2>
-      <form id="plan-form" class="row">
-        <label>I have <input id="plan-minutes" type="number" min="1" value="60" required> minutes</label>
-        <button type="submit">Make plan</button>
-      </form>
-      <div id="plan-result"></div>
-    </section>
+  <!-- Four columns: 1 = add things, 2 = make a plan + the tasks not in it, 3 = today's plan, 4 = what you are doing now.
+       Tasks can be dragged between column 2 and column 3. -->
+  <div class="layout">
 
-    <section>
-      <h2>My tasks</h2>
-      <p class="hint">Stopped halfway? Log the minutes and the % you finished. The task stays here for next time.</p>
-      <ul id="task-list" class="cards"></ul>
-    </section>
+    <div class="col col-left">
+      <section>
+        <h2>Add a task</h2>
+        <form id="task-form" class="stack">
+          <label>Name <input id="task-name" required></label>
+          <label>Category <input id="task-category" placeholder="coding, gym, study..." required></label>
+          <label>My guess (minutes) <input id="task-minutes" type="number" min="1" required></label>
+          <label>Priority (1-5)
+            <select id="task-priority">
+              <option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option>
+            </select>
+          </label>
+          <label>Deadline (optional) <input id="task-due" type="date"></label>
+          <button type="submit">Add task</button>
+        </form>
+      </section>
 
-    <section>
-      <h2>Add a task</h2>
-      <form id="task-form" class="grid">
-        <label>Name <input id="task-name" required></label>
-        <label>Category <input id="task-category" placeholder="coding, gym, study..." required></label>
-        <label>My guess (minutes) <input id="task-minutes" type="number" min="1" required></label>
-        <label>Priority (1-5)
-          <select id="task-priority">
-            <option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option>
-          </select>
-        </label>
-        <label>Deadline (optional) <input id="task-due" type="date"></label>
-        <button type="submit">Add task</button>
-      </form>
-    </section>
+      <section>
+        <h2>Daily tasks</h2>
+        <p class="hint">These appear in your task list automatically every day.</p>
+        <ul id="recurring-list" class="rows"></ul>
+        <form id="recurring-form" class="stack">
+          <label>Name <input id="rec-name" required></label>
+          <label>Category <input id="rec-category" required></label>
+          <label>My guess (minutes) <input id="rec-minutes" type="number" min="1" required></label>
+          <label>Priority (1-5)
+            <select id="rec-priority">
+              <option>1</option><option selected>2</option><option>3</option><option>4</option><option>5</option>
+            </select>
+          </label>
+          <button type="submit">Add daily task</button>
+        </form>
+      </section>
+    </div>
 
-    <section>
-      <h2>Daily tasks</h2>
-      <p class="hint">These appear in your task list automatically every day.</p>
-      <ul id="recurring-list" class="cards"></ul>
-      <form id="recurring-form" class="grid">
-        <label>Name <input id="rec-name" required></label>
-        <label>Category <input id="rec-category" required></label>
-        <label>My guess (minutes) <input id="rec-minutes" type="number" min="1" required></label>
-        <label>Priority (1-5)
-          <select id="rec-priority">
-            <option>1</option><option selected>2</option><option>3</option><option>4</option><option>5</option>
-          </select>
-        </label>
-        <button type="submit">Add daily task</button>
-      </form>
-    </section>
-  </main>
+    <div class="col col-pool">
+      <section>
+        <h2>Plan my time</h2>
+        <form id="plan-form" class="row">
+          <label>I have <input id="plan-minutes" type="number" min="1" value="60" required> minutes</label>
+          <button type="submit">Make plan</button>
+        </form>
+      </section>
 
+      <section>
+        <h2>All tasks</h2>
+        <p class="hint">Not in your plan. Drag a task to the plan, or press &rarr;.</p>
+        <ul id="pool-list" class="rows drop-zone" data-zone="pool" data-empty="No other tasks."></ul>
+      </section>
+    </div>
+
+    <div class="col col-plan">
+      <section>
+        <h2>Today's plan</h2>
+        <p class="hint">Drag tasks up or down to set the order, or back to All tasks to remove them.</p>
+        <div id="plan-summary"></div>
+        <ul id="plan-list" class="rows drop-zone" data-zone="plan" data-empty="Press Make plan, or drag tasks here."></ul>
+        <p id="plan-note" class="meta"></p>
+      </section>
+    </div>
+
+    <div class="col col-right">
+      <section id="timer-panel" class="sticky">
+        <h2>Working on</h2>
+        <div id="timer-box"></div>
+      </section>
+    </div>
+
+  </div>
+
+  <script src="timer.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
