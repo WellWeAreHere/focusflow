@@ -1,0 +1,106 @@
+/* CSS decides how the page looks. A rule is:  selector { property: value; }
+   "section" means every <section>, ".cards" means anything with class="cards", "#message" means id="message". */
+
+:root {
+  --bg: #f5f6f8;
+  --card: #ffffff;
+  --text: #1c2330;
+  --muted: #667085;
+  --line: #dde1e8;
+  --accent: #2f6fed;
+  --good: #1a7f4b;
+  --bad: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171d;
+    --card: #1d222b;
+    --text: #e8ebf0;
+    --muted: #9aa3b2;
+    --line: #2f3643;
+    --accent: #6b9bff;
+    --good: #4cc38a;
+    --bad: #ff8a80;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.45;
+}
+
+header, main, .message { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+header { padding-top: 24px; }
+h1 { margin: 0 0 4px; }
+header p { margin: 0 0 16px; color: var(--muted); }
+
+section {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+h2 { margin: 0 0 12px; font-size: 1.1rem; }
+.hint { margin: -6px 0 12px; color: var(--muted); font-size: 0.9rem; }
+
+label { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; color: var(--muted); }
+input, select {
+  font: inherit;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+button {
+  font: inherit;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+
+.row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+.row label { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 1rem; }
+.row input { width: 90px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; align-items: end; }
+
+.cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.cards:empty::before { content: "Nothing here yet."; color: var(--muted); }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.card-top { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.card-title { font-weight: 600; }
+.meta { color: var(--muted); font-size: 0.85rem; }
+.badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 1px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.bar { height: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 99px; margin: 8px 0; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--accent); }
+
+.session-form { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; margin-top: 6px; }
+.session-form input { width: 80px; }
+
+.message { margin-top: 12px; padding: 10px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); }
+.message.error { color: var(--bad); border-color: var(--bad); }
+.message.ok { color: var(--good); border-color: var(--good); }
+
+.summary { margin: 12px 0; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--bg); }
+.reason { margin: 4px 0 0; font-size: 0.9rem; color: var(--muted); }
+.left-out { margin-top: 12px; font-size: 0.9rem; color: var(--muted); }

@@ -31,15 +31,23 @@ Toolchain: g++ 14 via MSYS2 ucrt64, Python 3.11 (Microsoft Store build), Node. N
 The DLL must be linked with `-static`, otherwise Python fails to load it (it needs `libwinpthread-1.dll`).
 
 ## Status
-Done: C++ engine with tests, DLL bridge (smoke-tested from Python with ctypes), pushed to GitHub.
+Done: C++ engine with tests, DLL bridge, `backend/` (ctypes wrapper `engine.py`, SQLite `db.py`, `scoring.py`,
+FastAPI `main.py`), one-page frontend in `frontend/` (served by FastAPI), 31 API tests in `backend/test_api.py`.
+Features beyond the original plan:
+- Partial progress: `POST /tasks/{id}/sessions` takes minutes spent and % gained. Below 100% the task stays open;
+  the sitting is stored as unfinished. History row = (guessed, spent * 100 / % gained), so the engine is unchanged.
+  `/plan` only charges the remaining part of a half-done task.
+- Daily recurring tasks: templates in `recurring`; `db.spawn_recurring` makes today's copy lazily (no scheduler)
+  whenever tasks are listed or planned. Missed days give one fresh copy; the older unfinished one is marked skipped.
 Next, in order:
-1. `backend/engine.py`: ctypes wrapper (`predict_minutes`, `make_plan`) around the DLL.
-2. SQLite: `tasks` and `sessions` (finished work: category, guessed, actual) tables.
-3. FastAPI endpoints: add/list tasks, log a session, `POST /plan` with the minutes available. API tests.
-4. One-page frontend (plain HTML + JS): add task, log a session, enter minutes, see the plan with reasons.
 5. A simulator that generates realistic history, so we can report real numbers (error versus raw guesses).
+   The API has no "load history" endpoint; the simulator can call `db.add_session` directly.
 6. Benchmark C++ against a Python version, add CI, README with screenshots, update the resume with the measured results.
-Possible upgrade: split long tasks into chunks so partial work can be planned.
+The frontend layout has not been checked by eye yet (only the API and JS syntax were tested).
+
+Run the app (from `backend/`, after `engine\build.ps1`): `python -m uvicorn main:app --reload`, open http://127.0.0.1:8000.
+API tests (from `backend/`): `python -m pytest -q`. The database is `backend/focusflow.db` (gitignored); if the schema in
+`db.py` changes, delete that file, because `CREATE TABLE IF NOT EXISTS` does not alter existing tables.
 
 ## Gotchas
 - `g++ -o OUTPUT INPUT.cpp`: the output name comes after `-o`. Swapping them overwrites the source file (this happened once).

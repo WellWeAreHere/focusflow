@@ -234,3 +234,17 @@ def test_stopping_missing_recurring_is_404(client):
 def test_bad_recurring_is_rejected(client):
     assert make_recurring(client, guessed_minutes=0).status_code == 422
     assert make_recurring(client, priority=7).status_code == 422
+
+
+# --- the web page ------------------------------------------------------------------------------
+
+def test_page_and_its_files_are_served(client):
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "FocusFlow" in page.text
+    assert client.get("/app.js").status_code == 200
+    assert client.get("/style.css").status_code == 200
+
+
+def test_api_routes_still_win_over_the_page(client):
+    assert client.get("/tasks").json() == []       # JSON from the API, not the static files

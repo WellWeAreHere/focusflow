@@ -8,9 +8,11 @@
 #   FastAPI       = a library that lets us write each endpoint as an ordinary Python function.
 #                   It reads the request, calls our function, and turns the return value into JSON.
 import datetime
+import os
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import db
@@ -215,3 +217,11 @@ def create_plan(request: PlanIn, conn=Depends(get_conn)):
         "plan": plan,
         "left_out": left_out,
     }
+
+
+# --- The web page -----------------------------------------------------------------------------
+# Serve the files in ../frontend (index.html, style.css, app.js) from the same server, so the
+# page and the API live at one address and the browser needs no special permission to call us.
+# This goes LAST: a mount at "/" matches every path, so the API routes above must be checked first.
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
