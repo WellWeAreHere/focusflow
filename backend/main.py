@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 import db
 import engine   # loads focusflow.dll once, here, when the server starts
+import fill
 import scoring
 
 app = FastAPI(title="FocusFlow")
@@ -185,11 +186,37 @@ def create_plan(request: PlanIn, conn=Depends(get_conn)):
     except ValueError as e:   # the DLL rejected its arguments: our bug, not the user's
         raise HTTPException(status_code=500, detail=str(e))
 
-    # 4. Build the answer. The knapsack returns positions; look the tasks up again.
+    # 4. The knapsack only takes whole tasks, so some minutes are usually left over. Fill them with a slice
+    #    of the most worthwhile task that did not fit ("do about 40% of it").
     chosen_set = set(chosen)
+    spare = request.minutes - sum(minutes[i] for i in chosen)
+    candidates = []
+    for i, t in enumerate(tasks):
+        if i not in chosen_set:
+            candidates.append({"index": i, "remaining": minutes[i], "full": predicted_full[i],
+                               "percent_done": t["percent_done"], "value": values[i]})
+    slice_ = fill.pick_partial(candidates, spare)
+
+    # 5. Build the answer. The knapsack returns positions; look the tasks up again.
     plan = []
     left_out = []
+    partial = None
     for i, t in enumerate(tasks):
+        if slice_ is not None and i == slice_["index"]:
+            partial = {
+                "id": t["id"],
+                "name": t["name"],
+                "category": t["category"],
+                "guessed_minutes": t["guessed_minutes"],
+                "predicted_minutes": minutes[i],      # what the rest of the task needs in total
+                "minutes": slice_["minutes"],         # how long this suggested slice takes
+                "percent": slice_["percent"],         # share of the WHOLE task to aim for in it
+                "percent_done": t["percent_done"],
+                "value": values[i],
+                "reason": "does not fit whole (%d min), so use your last %d min on about %d%% of it; "
+                          "best value per minute of what was left out" % (minutes[i], slice_["minutes"], slice_["percent"]),
+            }
+            continue
         if i not in chosen_set:
             left_out.append({"id": t["id"], "name": t["name"], "predicted_minutes": minutes[i], "value": values[i]})
             continue
@@ -216,6 +243,7 @@ def create_plan(request: PlanIn, conn=Depends(get_conn)):
         "model": model,           # which predictor the selector trusted
         "avg_error": avg_error,   # its average error in minutes, or None if history was too short
         "plan": plan,
+        "partial": partial,       # a slice of one more task that fills the spare minutes, or None
         "left_out": left_out,
     }
 

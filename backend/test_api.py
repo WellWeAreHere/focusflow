@@ -267,3 +267,88 @@ def test_connection_can_be_closed_from_another_thread(tmp_path):
     worker.start()
     worker.join()
     assert errors == []
+
+
+# --- filling spare minutes with a slice of a task that did not fit -----------------------------
+
+import fill
+
+
+def candidate(index, remaining, full, value, percent_done=0):
+    return {"index": index, "remaining": remaining, "full": full, "percent_done": percent_done, "value": value}
+
+
+def test_fill_picks_the_best_value_per_minute():
+    # Both need 40 minutes, 20 are spare; the second is worth more per minute.
+    chosen = fill.pick_partial([candidate(0, 40, 40.0, 30), candidate(1, 40, 40.0, 50)], 20)
+    assert chosen == {"index": 1, "percent": 50, "minutes": 20}
+
+
+def test_fill_rounds_the_percentage_down_so_it_never_overfills():
+    chosen = fill.pick_partial([candidate(0, 30, 30.0, 40)], 20)   # 20/30 = 66.6%
+    assert chosen["percent"] == 66
+    assert chosen["minutes"] <= 20
+
+
+def test_fill_percent_is_of_the_whole_task_not_of_what_is_left():
+    # Half done: 40 of 80 minutes left, 20 spare. 20 minutes is 25% of the WHOLE task.
+    chosen = fill.pick_partial([candidate(0, 40, 80.0, 30, percent_done=50)], 20)
+    assert chosen["percent"] == 25
+
+
+def test_fill_skips_tiny_gaps_and_tiny_slices():
+    assert fill.pick_partial([candidate(0, 40, 40.0, 30)], 4) is None        # gap under 5 minutes
+    assert fill.pick_partial([candidate(0, 300, 300.0, 30)], 10) is None     # 10/300 = 3%: not worth it
+    assert fill.pick_partial([], 30) is None                                 # nothing left out
+
+
+def test_fill_falls_back_to_a_task_that_gives_a_big_enough_slice():
+    big = candidate(0, 600, 600.0, 300)     # best value per minute (0.5), but 20/600 = 3% is too small a slice
+    small = candidate(1, 40, 40.0, 10)      # worth less per minute (0.25), yet the only one that gives a useful slice
+    assert fill.pick_partial([big, small], 20)["index"] == 1
+
+
+def test_plan_fills_the_spare_minutes_with_part_of_a_task(client):
+    make_task(client, name="A", priority=5, guessed_minutes=40)    # value 50
+    make_task(client, name="B", priority=3, guessed_minutes=40)    # value 30, does not fit next to A
+    plan = client.post("/plan", json={"minutes": 60}).json()
+    assert names(plan) == ["A"]
+    assert plan["minutes_used"] == 40
+    assert plan["partial"]["name"] == "B"
+    assert plan["partial"]["minutes"] == 20                        # exactly the 20 spare minutes
+    assert plan["partial"]["percent"] == 50                        # half of a 40-minute task
+    assert plan["left_out"] == []                                  # B moved out of "left out"
+    assert plan["total_value"] == 50                               # a slice is not counted as finished value
+
+
+def test_plan_has_no_slice_when_the_gap_is_too_small(client):
+    make_task(client, name="A", priority=5, guessed_minutes=40)
+    make_task(client, name="B", priority=3, guessed_minutes=40)
+    plan = client.post("/plan", json={"minutes": 43}).json()       # only 3 spare minutes
+    assert plan["partial"] is None
+    assert [t["name"] for t in plan["left_out"]] == ["B"]
+
+
+def test_plan_has_no_slice_when_everything_fits(client):
+    make_task(client, name="A", priority=5, guessed_minutes=20)
+    make_task(client, name="B", priority=3, guessed_minutes=20)
+    plan = client.post("/plan", json={"minutes": 90}).json()
+    assert plan["partial"] is None
+    assert plan["left_out"] == []
+
+
+def test_whole_tasks_plus_slice_never_exceed_the_time(client):
+    add_abc(client)
+    for budget in [5, 12, 29, 31, 45, 59, 61, 100]:
+        plan = client.post("/plan", json={"minutes": budget}).json()
+        slice_minutes = plan["partial"]["minutes"] if plan["partial"] else 0
+        assert plan["minutes_used"] + slice_minutes <= budget, budget
+        if plan["partial"]:
+            assert plan["partial"]["id"] not in [p["id"] for p in plan["plan"]]
+
+
+def test_plan_with_nothing_fitting_whole_still_suggests_a_slice(client):
+    make_task(client, name="long", priority=3, guessed_minutes=120)
+    plan = client.post("/plan", json={"minutes": 30}).json()
+    assert plan["plan"] == []
+    assert plan["partial"]["percent"] == 25                        # 30 of 120 minutes
