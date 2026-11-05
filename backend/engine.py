@@ -7,9 +7,13 @@
 # So below we tell it the types once, and after that calling is easy.
 import ctypes
 import os
+import sys
 
-# Find the DLL relative to this file, so it works no matter where Python is started from.
-DLL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine", "build", "focusflow.dll")
+# Windows calls the library file a .dll, Linux a .so (used by the CI build). Same code inside.
+LIB_NAME = "focusflow.dll" if sys.platform == "win32" else "libfocusflow.so"
+
+# Find the library relative to this file, so it works no matter where Python is started from.
+DLL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine", "build", LIB_NAME)
 _dll = ctypes.CDLL(DLL_PATH)
 
 # --- Describe the C functions to ctypes -------------------------------------------------------

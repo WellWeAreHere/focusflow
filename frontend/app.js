@@ -298,18 +298,20 @@ async function onStopClick(event) {
   }
 }
 
-async function onPlanSubmit(event) {
-  event.preventDefault();
+async function runPlan(minutes) {
   try {
-    const result = await api("POST", "/plan", {
-      minutes: Number(document.getElementById("plan-minutes").value),
-    });
+    const result = await api("POST", "/plan", { minutes: minutes });
     hideMessage();
     drawPlan(result);
     await refresh();   // the plan may have created today's daily tasks
   } catch (error) {
     showMessage(error.message, true);
   }
+}
+
+async function onPlanSubmit(event) {
+  event.preventDefault();
+  await runPlan(Number(document.getElementById("plan-minutes").value));
 }
 
 
@@ -320,6 +322,13 @@ async function start() {
     await refresh();
   } catch (error) {
     showMessage("Could not reach the server: " + error.message, true);
+    return;
+  }
+  // Opening the page as /?plan=60 makes the plan straight away (handy for demos and screenshots).
+  const wanted = new URLSearchParams(window.location.search).get("plan");
+  if (wanted !== null) {
+    document.getElementById("plan-minutes").value = wanted;
+    await runPlan(Number(wanted));
   }
 }
 

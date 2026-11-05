@@ -22,3 +22,4 @@ __pycache__/
 # Frontend tooling, if we add any later
 node_modules/
 .next/
+*.so

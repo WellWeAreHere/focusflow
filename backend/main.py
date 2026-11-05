@@ -22,8 +22,9 @@ import scoring
 app = FastAPI(title="FocusFlow")
 
 # Which database file to use. A variable (not hard-coded inside the functions) so tests can
-# point it at a throwaway file.
-DB_FILE = db.DB_PATH
+# point it at a throwaway file. Setting the FOCUSFLOW_DB environment variable picks another file
+# (handy for trying the app on demo data without touching your real tasks).
+DB_FILE = os.environ.get("FOCUSFLOW_DB", db.DB_PATH)
 
 
 def get_conn():

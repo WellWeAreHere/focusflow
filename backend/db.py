@@ -27,7 +27,11 @@ def connect(path=DB_PATH):
 
     Pass the special path ":memory:" to get a throwaway database for tests.
     """
-    conn = sqlite3.connect(path)
+    # By default SQLite refuses to let a different thread touch a connection. FastAPI may open the
+    # connection in one worker thread and close it in another, so that check would raise an error
+    # at the end of requests. It is safe to turn off here: every request gets its OWN connection,
+    # used by one thread at a time, and never shared between requests.
+    conn = sqlite3.connect(path, check_same_thread=False)
     # By default a row comes back as a plain tuple, so you must remember column positions.
     # Row lets us write row["name"] instead of row[1].
     conn.row_factory = sqlite3.Row

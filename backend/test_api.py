@@ -4,6 +4,7 @@
 # or the function raises an error. TestClient pretends to be a browser and calls our API
 # in-process, so no server needs to be started.
 import datetime
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -248,3 +249,21 @@ def test_page_and_its_files_are_served(client):
 
 def test_api_routes_still_win_over_the_page(client):
     assert client.get("/tasks").json() == []       # JSON from the API, not the static files
+
+
+# --- regression: FastAPI may open and close a connection on different threads ------------------
+
+def test_connection_can_be_closed_from_another_thread(tmp_path):
+    conn = main.db.connect(str(tmp_path / "threads.db"))
+    errors = []
+
+    def close_it():
+        try:
+            conn.close()
+        except Exception as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=close_it)
+    worker.start()
+    worker.join()
+    assert errors == []

@@ -32,18 +32,20 @@ The DLL must be linked with `-static`, otherwise Python fails to load it (it nee
 
 ## Status
 Done: C++ engine with tests, DLL bridge, `backend/` (ctypes wrapper `engine.py`, SQLite `db.py`, `scoring.py`,
-FastAPI `main.py`), one-page frontend in `frontend/` (served by FastAPI), 31 API tests in `backend/test_api.py`.
+FastAPI `main.py`), one-page frontend in `frontend/` (served by FastAPI), 32 API tests in `backend/test_api.py`.
 Features beyond the original plan:
 - Partial progress: `POST /tasks/{id}/sessions` takes minutes spent and % gained. Below 100% the task stays open;
   the sitting is stored as unfinished. History row = (guessed, spent * 100 / % gained), so the engine is unchanged.
   `/plan` only charges the remaining part of a half-done task.
 - Daily recurring tasks: templates in `recurring`; `db.spawn_recurring` makes today's copy lazily (no scheduler)
   whenever tasks are listed or planned. Missed days give one fresh copy; the older unfinished one is marked skipped.
-Next, in order:
-5. A simulator that generates realistic history, so we can report real numbers (error versus raw guesses).
-   The API has no "load history" endpoint; the simulator can call `db.add_session` directly.
-6. Benchmark C++ against a Python version, add CI, README with screenshots, update the resume with the measured results.
-The frontend layout has not been checked by eye yet (only the API and JS syntax were tested).
+Steps 5-6 are done too: `simulator/simulate.py` (simulated users; results in `simulator/results.md`),
+`benchmark/` (pure-Python port + timings, checked equal to C++), `.github/workflows/ci.yml` (+ `engine/build.sh` for Linux),
+`README.md` with a screenshot in `docs/`. The frontend layout was checked by screenshot (desktop and 500px wide).
+Quote only the SIMULATED numbers, and say they are simulated. In the control group (already-accurate guessers) FocusFlow does
+not help and is slightly worse with under ~40 sessions of history: say that too.
+Remaining ideas: show the user's own guess until there is enough history; push and confirm CI is green on GitHub (the Linux
+build script was only tried on Windows); put the measured numbers on the resume.
 
 Run the app (from `backend/`, after `engine\build.ps1`): `python -m uvicorn main:app --reload`, open http://127.0.0.1:8000.
 API tests (from `backend/`): `python -m pytest -q`. The database is `backend/focusflow.db` (gitignored); if the schema in

@@ -1,0 +1,33 @@
+name: CI
+
+# Runs on every push to main and on pull requests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest   # g++ and Python tooling come preinstalled
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python packages
+        run: pip install -r backend/requirements.txt
+
+      # Builds + runs the C++ unit tests, then builds libfocusflow.so for Python.
+      - name: Build and test the C++ engine
+        run: bash engine/build.sh
+
+      - name: API tests
+        run: python -m pytest -q
+        working-directory: backend
+
+      # Checks that the pure-Python port of the engine (used for the benchmark) agrees with the C++ one.
+      - name: C++ vs Python equivalence tests
+        run: python -m pytest -q
+        working-directory: benchmark
