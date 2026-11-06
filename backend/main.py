@@ -22,6 +22,17 @@ import scoring
 
 app = FastAPI(title="FocusFlow")
 
+
+# Browsers may keep an old copy of the page files and keep using it after we change them (that
+# showed old behaviour after an update). "no-cache" tells the browser: you may store the file, but
+# ask the server whether it changed before using it. An unchanged file is answered with a tiny
+# "not modified" reply, so this costs almost nothing.
+@app.middleware("http")
+async def never_use_stale_files(request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
 # Which database file to use. A variable (not hard-coded inside the functions) so tests can
 # point it at a throwaway file. Setting the FOCUSFLOW_DB environment variable picks another file
 # (handy for trying the app on demo data without touching your real tasks).
@@ -53,7 +64,8 @@ def get_conn():
 class TaskIn(BaseModel):
     name: str = Field(min_length=1)
     category: str = Field(min_length=1)
-    guessed_minutes: int = Field(gt=0)            # gt = greater than
+    # Optional: leave it out and the planner uses what it remembers from earlier sittings.
+    guessed_minutes: Optional[int] = Field(default=None, gt=0)   # gt = greater than
     priority: int = Field(ge=1, le=5)             # ge = greater or equal, le = less or equal
     due_date: Optional[datetime.date] = None      # "2026-11-10" is accepted; anything else is rejected
 
@@ -61,8 +73,12 @@ class TaskIn(BaseModel):
 class RecurringIn(BaseModel):
     name: str = Field(min_length=1)
     category: str = Field(min_length=1)
-    guessed_minutes: int = Field(gt=0)
+    guessed_minutes: Optional[int] = Field(default=None, gt=0)
     priority: int = Field(ge=1, le=5)
+
+
+class ResetIn(BaseModel):
+    confirm: bool          # must be true: a stray request cannot wipe the data by accident
 
 
 class SessionIn(BaseModel):
@@ -93,11 +109,18 @@ def list_tasks(conn=Depends(get_conn)):
     today = datetime.date.today().isoformat()
     tasks = []
     for row in db.list_open_tasks(conn):
+        # The minutes to show: the user's guess, or (no guess) what we remember.
+        if row["guessed_minutes"] is not None:
+            shown, source = row["guessed_minutes"], "guess"
+        else:
+            shown, source = db.remembered_minutes(conn, row["name"], row["category_id"])
         tasks.append({
             "id": row["id"],
             "name": row["name"],
             "category": row["category"],
             "guessed_minutes": row["guessed_minutes"],
+            "shown_minutes": shown,
+            "estimate_source": source,
             "priority": row["priority"],
             "due_date": row["due_date"],
             "percent_done": row["percent_done"],
@@ -146,6 +169,30 @@ def stop_recurring(template_id: int, conn=Depends(get_conn)):
     return {"id": template_id, "active": False}
 
 
+# How the minutes of a task with no guess were worked out (shown in the plan's reason).
+SOURCE_TEXT = {
+    "remembered": "based on how long this task took last time",
+    "category": "based on your average for this category",
+    "default": "nothing to go on yet, so a 30 min placeholder",
+}
+
+
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: int, conn=Depends(get_conn)):
+    if not db.delete_task(conn, task_id):
+        raise HTTPException(status_code=404, detail="no open task with that id")
+    return {"deleted": task_id}
+
+
+@app.post("/reset")
+def reset_data(request: ResetIn, conn=Depends(get_conn)):
+    """Erase all tasks, daily tasks and history. Cannot be undone."""
+    if not request.confirm:
+        raise HTTPException(status_code=400, detail="send {\"confirm\": true} to erase everything")
+    db.reset_all(conn)
+    return {"reset": True}
+
+
 def due_text(due_date, today):
     """'due today', 'due in 3 days', ... for the reasons shown to the user."""
     if due_date is None:
@@ -166,10 +213,24 @@ def create_plan(request: PlanIn, conn=Depends(get_conn)):
     tasks = db.list_open_tasks(conn)
 
     # 1. Predict how long each task will REALLY take (C++ selector + predictors).
+    #    Tasks WITH a guess go to the engine. Tasks WITHOUT one cannot (the engine learns from
+    #    guesses), so they get the time we remember for that task name instead.
     history = db.history_for_engine(conn)
-    task_inputs = [(t["category_id"], t["guessed_minutes"]) for t in tasks]
+    guessed_positions = []
+    task_inputs = []
+    for i, t in enumerate(tasks):
+        if t["guessed_minutes"] is not None:
+            guessed_positions.append(i)
+            task_inputs.append((t["category_id"], t["guessed_minutes"]))
     try:
-        predicted_full, model, avg_error = engine.predict_minutes(history, task_inputs)
+        engine_minutes, model, avg_error = engine.predict_minutes(history, task_inputs)
+        predicted_full = [0] * len(tasks)
+        sources = ["guess"] * len(tasks)
+        for k, i in enumerate(guessed_positions):
+            predicted_full[i] = engine_minutes[k]
+        for i, t in enumerate(tasks):
+            if t["guessed_minutes"] is None:
+                predicted_full[i], sources[i] = db.remembered_minutes(conn, t["name"], t["category_id"])
 
         # 2. Cost and value of each task for the knapsack. Only the REMAINING part of a
         #    half-done task costs time. Round to whole minutes (the table has one column per
@@ -208,6 +269,7 @@ def create_plan(request: PlanIn, conn=Depends(get_conn)):
                 "name": t["name"],
                 "category": t["category"],
                 "guessed_minutes": t["guessed_minutes"],
+                "estimate_source": sources[i],
                 "predicted_minutes": minutes[i],      # what the rest of the task needs in total
                 "minutes": slice_["minutes"],         # how long this suggested slice takes
                 "percent": slice_["percent"],         # share of the WHOLE task to aim for in it
@@ -223,12 +285,16 @@ def create_plan(request: PlanIn, conn=Depends(get_conn)):
         reason = "priority %d, %s; expected %d min" % (t["priority"], due_text(t["due_date"], today), minutes[i])
         if t["percent_done"] > 0:
             reason += " for the remaining %d%%" % (100 - t["percent_done"])
-        reason += " (you guessed %d min for the whole task)" % t["guessed_minutes"]
+        if t["guessed_minutes"] is not None:
+            reason += " (you guessed %d min for the whole task)" % t["guessed_minutes"]
+        else:
+            reason += " (no guess: %s)" % SOURCE_TEXT[sources[i]]
         plan.append({
             "id": t["id"],
             "name": t["name"],
             "category": t["category"],
             "guessed_minutes": t["guessed_minutes"],
+            "estimate_source": sources[i],
             "predicted_minutes": minutes[i],
             "percent_done": t["percent_done"],
             "value": values[i],

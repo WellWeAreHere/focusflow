@@ -352,3 +352,186 @@ def test_plan_with_nothing_fitting_whole_still_suggests_a_slice(client):
     plan = client.post("/plan", json={"minutes": 30}).json()
     assert plan["plan"] == []
     assert plan["partial"]["percent"] == 25                        # 30 of 120 minutes
+
+
+# --- tasks without a guessed time -------------------------------------------------------------
+
+def make_unguessed(client, **changes):
+    body = {"name": "gym", "category": "health", "priority": 3}
+    body.update(changes)
+    return client.post("/tasks", json=body)
+
+
+def planned(client, minutes=300):
+    return client.post("/plan", json={"minutes": minutes}).json()
+
+
+def test_task_without_guess_is_accepted(client):
+    assert make_unguessed(client).status_code == 201
+    task = client.get("/tasks").json()[0]
+    assert task["guessed_minutes"] is None
+    assert task["estimate_source"] == "default"      # nothing known yet
+    assert task["shown_minutes"] == 30
+
+
+def test_zero_guess_is_still_rejected(client):
+    assert make_unguessed(client, guessed_minutes=0).status_code == 422
+
+
+def test_second_time_uses_the_time_it_took_before(client):
+    first = make_unguessed(client).json()["id"]
+    client.post("/tasks/%d/sessions" % first, json={"minutes_spent": 50, "percent_gained": 100})
+
+    make_unguessed(client)                           # same name, still no guess
+    plan = planned(client)
+    item = plan["plan"][0]
+    assert item["predicted_minutes"] == 50
+    assert item["estimate_source"] == "remembered"
+    assert "last time" in item["reason"]
+
+
+def test_memory_ignores_capitals_and_averages_recent_sittings(client):
+    for spent in (40, 60):
+        task_id = make_unguessed(client, name="Gym").json()["id"]
+        client.post("/tasks/%d/sessions" % task_id, json={"minutes_spent": spent, "percent_gained": 100})
+    make_unguessed(client, name="  gym ")
+    assert planned(client)["plan"][0]["predicted_minutes"] == 50
+
+
+def test_half_done_sitting_is_scaled_to_the_whole_task(client):
+    task_id = make_unguessed(client, name="essay").json()["id"]
+    client.post("/tasks/%d/sessions" % task_id, json={"minutes_spent": 30, "percent_gained": 50})
+    client.post("/tasks/%d/sessions" % task_id, json={"minutes_spent": 30, "percent_gained": 50})
+    make_unguessed(client, name="essay")
+    assert planned(client)["plan"][0]["predicted_minutes"] == 60
+
+
+def test_new_name_falls_back_to_category_average(client):
+    task_id = make_unguessed(client, name="gym").json()["id"]
+    client.post("/tasks/%d/sessions" % task_id, json={"minutes_spent": 40, "percent_gained": 100})
+    make_unguessed(client, name="yoga")              # new name, same category "health"
+    item = planned(client)["plan"][0]
+    assert item["estimate_source"] == "category"
+    assert item["predicted_minutes"] == 40
+
+
+def test_unguessed_sittings_do_not_enter_the_engine_history(client):
+    import db
+    task_id = make_unguessed(client).json()["id"]
+    client.post("/tasks/%d/sessions" % task_id, json={"minutes_spent": 50, "percent_gained": 100})
+    conn = db.connect(main.DB_FILE)
+    assert db.history_for_engine(conn) == []
+    conn.close()
+
+
+def test_guessed_and_unguessed_tasks_plan_together(client):
+    make_task(client, name="report", guessed_minutes=45)
+    make_unguessed(client, name="gym")
+    plan = planned(client)
+    sources = {p["name"]: p["estimate_source"] for p in plan["plan"]}
+    assert sources == {"report": "guess", "gym": "default"}
+
+
+def test_daily_task_without_guess_learns_from_yesterday(client):
+    import db
+    client.post("/recurring", json={"name": "gym", "category": "health", "priority": 2})
+    task = client.get("/tasks").json()[0]
+    client.post("/tasks/%d/sessions" % task["id"], json={"minutes_spent": 35, "percent_gained": 100})
+    conn = db.connect(main.DB_FILE)
+    db.spawn_recurring(conn, "2999-01-01")           # pretend a new day began
+    conn.close()
+    assert planned(client)["plan"][0]["predicted_minutes"] == 35
+
+
+def test_old_database_is_upgraded_and_keeps_its_rows(tmp_path):
+    import sqlite3
+    import db
+    path = str(tmp_path / "old.db")
+    old = sqlite3.connect(path)
+    old.executescript("""
+        CREATE TABLE categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
+        CREATE TABLE recurring (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+            category_id INTEGER NOT NULL, guessed_minutes INTEGER NOT NULL, priority INTEGER NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1, last_spawned TEXT);
+        CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+            category_id INTEGER NOT NULL REFERENCES categories(id), guessed_minutes INTEGER NOT NULL,
+            priority INTEGER NOT NULL, due_date TEXT, percent_done INTEGER NOT NULL DEFAULT 0,
+            spent_minutes INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0, template_id INTEGER);
+        CREATE TABLE sessions (id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER REFERENCES tasks(id), category_id INTEGER NOT NULL,
+            guessed_minutes INTEGER NOT NULL, minutes_spent INTEGER NOT NULL,
+            percent_gained INTEGER NOT NULL, finished INTEGER NOT NULL, actual_minutes INTEGER NOT NULL);
+        INSERT INTO categories (name) VALUES ('coding');
+        INSERT INTO tasks (name, category_id, guessed_minutes, priority) VALUES ('old task', 1, 60, 3);
+        INSERT INTO sessions (task_id, category_id, guessed_minutes, minutes_spent, percent_gained, finished, actual_minutes)
+            VALUES (1, 1, 60, 80, 100, 1, 80);
+    """)
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)                          # opening it upgrades it
+    assert conn.execute("SELECT name FROM tasks").fetchone()["name"] == "old task"
+    assert db.history_for_engine(conn) == [(1, 60, 80)]
+    db.add_task(conn, "no guess", "coding", None, 3)  # NULL is now allowed
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.close()
+
+
+# --- reset ------------------------------------------------------------------------------------
+
+def test_reset_erases_everything_and_restarts_ids(client):
+    task_id = make_task(client).json()["id"]
+    client.post("/tasks/%d/sessions" % task_id, json={"minutes_spent": 50, "percent_gained": 100})
+    client.post("/recurring", json={"name": "gym", "category": "health", "guessed_minutes": 30, "priority": 2})
+    make_unguessed(client, name="read")
+
+    assert client.post("/reset", json={"confirm": True}).status_code == 200
+
+    assert client.get("/tasks").json() == []
+    assert client.get("/recurring").json() == []
+    assert make_task(client).json()["id"] == 1            # numbering starts again
+    # the history is gone too: a plan now has no model to report
+    assert client.post("/plan", json={"minutes": 60}).json()["avg_error"] is None
+
+
+def test_reset_needs_explicit_confirmation(client):
+    make_task(client)
+    assert client.post("/reset", json={"confirm": False}).status_code == 400
+    assert client.post("/reset", json={}).status_code == 422
+    assert len(client.get("/tasks").json()) == 1          # nothing was erased
+
+
+# --- deleting a task --------------------------------------------------------------------------
+
+def test_delete_untouched_task_removes_it(client):
+    task_id = make_task(client).json()["id"]
+    assert client.delete("/tasks/%d" % task_id).status_code == 200
+    assert client.get("/tasks").json() == []
+
+
+def test_delete_unknown_task_is_404(client):
+    assert client.delete("/tasks/999").status_code == 404
+    task_id = make_task(client).json()["id"]
+    client.delete("/tasks/%d" % task_id)
+    assert client.delete("/tasks/%d" % task_id).status_code == 404     # already gone
+
+
+def test_deleted_task_still_teaches_the_planner(client):
+    # work on "gym" (no guess) for 50 min, delete it, then add "gym" again
+    task_id = make_unguessed(client).json()["id"]
+    client.post("/tasks/%d/sessions" % task_id, json={"minutes_spent": 50, "percent_gained": 40})
+    assert client.delete("/tasks/%d" % task_id).status_code == 200
+    assert client.get("/tasks").json() == []                            # hidden from the list
+
+    make_unguessed(client)
+    item = planned(client)["plan"][0]
+    assert item["estimate_source"] == "remembered"                      # 50 min for 40% -> 125 min whole
+    assert item["predicted_minutes"] == 125
+
+
+def test_cannot_log_time_on_a_deleted_task(client):
+    task_id = make_task(client).json()["id"]
+    client.post("/tasks/%d/sessions" % task_id, json={"minutes_spent": 10, "percent_gained": 10})
+    client.delete("/tasks/%d" % task_id)
+    response = client.post("/tasks/%d/sessions" % task_id, json={"minutes_spent": 10, "percent_gained": 10})
+    assert response.status_code == 404

@@ -20,6 +20,7 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "focusflow.db
 OPEN = 0      # still to do (maybe partly done)
 DONE = 1      # reached 100%
 SKIPPED = 2   # a recurring task whose day passed without finishing
+DELETED = 3   # removed by the user, but kept because its sittings still teach the planner
 
 
 def connect(path=DB_PATH):
@@ -41,10 +42,50 @@ def connect(path=DB_PATH):
     return conn
 
 
+# The layout of the tables that mention guessed_minutes. TABLE_NAME is swapped in for the real name,
+# because the migration below has to build a copy of a table under a temporary name.
+# guessed_minutes may be NULL (= the user gave no guess); when it IS given it must be above 0.
+RECURRING_SQL = """
+    CREATE TABLE IF NOT EXISTS TABLE_NAME (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        name            TEXT NOT NULL,
+        category_id     INTEGER NOT NULL REFERENCES categories(id),
+        guessed_minutes INTEGER CHECK (guessed_minutes > 0),
+        priority        INTEGER NOT NULL CHECK (priority BETWEEN 1 AND 5),
+        active          INTEGER NOT NULL DEFAULT 1,
+        last_spawned    TEXT
+    );
+"""
+TASKS_SQL = """
+    CREATE TABLE IF NOT EXISTS TABLE_NAME (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        name            TEXT NOT NULL,
+        category_id     INTEGER NOT NULL REFERENCES categories(id),
+        guessed_minutes INTEGER CHECK (guessed_minutes > 0),
+        priority        INTEGER NOT NULL CHECK (priority BETWEEN 1 AND 5),
+        due_date        TEXT,
+        percent_done    INTEGER NOT NULL DEFAULT 0 CHECK (percent_done BETWEEN 0 AND 100),
+        spent_minutes   INTEGER NOT NULL DEFAULT 0,
+        done            INTEGER NOT NULL DEFAULT 0,
+        template_id     INTEGER REFERENCES recurring(id)
+    );
+"""
+SESSIONS_SQL = """
+    CREATE TABLE IF NOT EXISTS TABLE_NAME (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id         INTEGER REFERENCES tasks(id),
+        category_id     INTEGER NOT NULL REFERENCES categories(id),
+        guessed_minutes INTEGER CHECK (guessed_minutes > 0),
+        minutes_spent   INTEGER NOT NULL CHECK (minutes_spent > 0),
+        percent_gained  INTEGER NOT NULL CHECK (percent_gained BETWEEN 1 AND 100),
+        finished        INTEGER NOT NULL,
+        actual_minutes  INTEGER NOT NULL CHECK (actual_minutes > 0)
+    );
+"""
+
+
 def create_tables(conn):
     # IF NOT EXISTS makes this safe to run every time the program starts.
-    # (It does NOT change a table that already exists. If you edit a column here, delete your
-    # local focusflow.db so it is rebuilt, or the old layout stays.)
     #
     # categories: the C++ engine only understands numbers, so each category name
     #   ("coding", "gym") gets a number (its id). The id is what we send to the engine.
@@ -54,6 +95,8 @@ def create_tables(conn):
     # tasks: things to do. They persist until percent_done reaches 100, so a half-finished
     #   task simply stays here for the next session. spent_minutes is the total time put in so far.
     #   due_date is text like "2026-11-10", or NULL (= no value) when there is no deadline.
+    #   guessed_minutes is NULL when the user did not guess: the planner then uses what it
+    #   remembers (see remembered_minutes).
     #   template_id is set when the task is a daily copy made from a recurring template.
     # sessions: one sitting of work = the history the engine learns from.
     #   minutes_spent / percent_gained / finished describe what really happened in the sitting.
@@ -65,39 +108,39 @@ def create_tables(conn):
             id   INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE
         );
-        CREATE TABLE IF NOT EXISTS recurring (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            name            TEXT NOT NULL,
-            category_id     INTEGER NOT NULL REFERENCES categories(id),
-            guessed_minutes INTEGER NOT NULL CHECK (guessed_minutes > 0),
-            priority        INTEGER NOT NULL CHECK (priority BETWEEN 1 AND 5),
-            active          INTEGER NOT NULL DEFAULT 1,
-            last_spawned    TEXT
-        );
-        CREATE TABLE IF NOT EXISTS tasks (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            name            TEXT NOT NULL,
-            category_id     INTEGER NOT NULL REFERENCES categories(id),
-            guessed_minutes INTEGER NOT NULL CHECK (guessed_minutes > 0),
-            priority        INTEGER NOT NULL CHECK (priority BETWEEN 1 AND 5),
-            due_date        TEXT,
-            percent_done    INTEGER NOT NULL DEFAULT 0 CHECK (percent_done BETWEEN 0 AND 100),
-            spent_minutes   INTEGER NOT NULL DEFAULT 0,
-            done            INTEGER NOT NULL DEFAULT 0,
-            template_id     INTEGER REFERENCES recurring(id)
-        );
-        CREATE TABLE IF NOT EXISTS sessions (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id         INTEGER REFERENCES tasks(id),
-            category_id     INTEGER NOT NULL REFERENCES categories(id),
-            guessed_minutes INTEGER NOT NULL CHECK (guessed_minutes > 0),
-            minutes_spent   INTEGER NOT NULL CHECK (minutes_spent > 0),
-            percent_gained  INTEGER NOT NULL CHECK (percent_gained BETWEEN 1 AND 100),
-            finished        INTEGER NOT NULL,
-            actual_minutes  INTEGER NOT NULL CHECK (actual_minutes > 0)
-        );
     """)
+    conn.executescript(RECURRING_SQL.replace("TABLE_NAME", "recurring"))
+    conn.executescript(TASKS_SQL.replace("TABLE_NAME", "tasks"))
+    conn.executescript(SESSIONS_SQL.replace("TABLE_NAME", "sessions"))
     conn.commit()
+    _allow_missing_guess(conn)
+
+
+def _allow_missing_guess(conn):
+    """Upgrade a database made before guesses became optional.
+
+    CREATE TABLE IF NOT EXISTS leaves an old table alone, and SQLite cannot remove NOT NULL from a
+    column. So for each old table we build a new one with the current layout, copy the rows over,
+    drop the old one and rename the new one. This is the method the SQLite docs recommend.
+    Foreign keys are switched off while we do it, otherwise dropping tasks would be refused.
+    A database that is already up to date is not touched.
+    """
+    tables = [("recurring", RECURRING_SQL), ("tasks", TASKS_SQL), ("sessions", SESSIONS_SQL)]
+    for name, layout in tables:
+        columns = conn.execute("PRAGMA table_info(" + name + ")").fetchall()
+        needs_upgrade = False
+        for column in columns:
+            if column["name"] == "guessed_minutes" and column["notnull"] == 1:
+                needs_upgrade = True
+        if not needs_upgrade:
+            continue
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.executescript(layout.replace("TABLE_NAME", name + "_new"))
+        conn.execute("INSERT INTO " + name + "_new SELECT * FROM " + name)
+        conn.execute("DROP TABLE " + name)
+        conn.execute("ALTER TABLE " + name + "_new RENAME TO " + name)
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 # --- categories -------------------------------------------------------------------------------
@@ -141,6 +184,25 @@ def list_open_tasks(conn):
         ORDER BY tasks.id
     """, (OPEN,)).fetchall()
     return rows
+
+
+def delete_task(conn, task_id):
+    """Remove an open task from the list. Returns False if there was no open task with that id.
+
+    If you already worked on it, its sittings stay in the history (the predictor learns from them,
+    and a later task with the same name uses them), so the row is only hidden (done = DELETED).
+    A task that was never worked on has nothing to remember, so it is really deleted.
+    """
+    task = conn.execute("SELECT id FROM tasks WHERE id = ? AND done = ?", (task_id, OPEN)).fetchone()
+    if task is None:
+        return False
+    sittings = conn.execute("SELECT COUNT(*) AS n FROM sessions WHERE task_id = ?", (task_id,)).fetchone()["n"]
+    if sittings > 0:
+        conn.execute("UPDATE tasks SET done = ? WHERE id = ?", (DELETED, task_id))
+    else:
+        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    conn.commit()
+    return True
 
 
 def mark_done(conn, task_id):
@@ -212,11 +274,56 @@ def add_session(conn, category, guessed_minutes, actual_minutes):
 
 def history_for_engine(conn):
     """The history in the exact shape engine.predict_minutes wants: (category_id, guessed, actual),
-    oldest first. The selector tests on the NEWEST 30%, so the order matters."""
+    oldest first. The selector tests on the NEWEST 30%, so the order matters.
+    Sittings on tasks with no guess are left out: the engine learns "guess -> real time", and
+    there is no guess to learn from. They are used by remembered_minutes instead."""
     rows = conn.execute(
-        "SELECT category_id, guessed_minutes, actual_minutes FROM sessions ORDER BY id"
+        "SELECT category_id, guessed_minutes, actual_minutes FROM sessions "
+        "WHERE guessed_minutes IS NOT NULL ORDER BY id"
     ).fetchall()
     return [(r["category_id"], r["guessed_minutes"], r["actual_minutes"]) for r in rows]
+
+
+# --- tasks without a guess -------------------------------------------------------------------
+
+DEFAULT_MINUTES = 30      # used only when there is nothing at all to go on
+MEMORY_SITTINGS = 5       # how many of the latest sittings on a same-named task we average
+
+
+def remembered_minutes(conn, task_name, category_id):
+    """How long should a task take when the user gave no guess? Returns (minutes, source).
+
+    1. "remembered": earlier sittings on a task with the SAME NAME (ignoring capitals). We average
+       the whole-task time of the latest few, so "gym took 50 min last time" becomes 50.
+       (actual_minutes already scales a half-done sitting up to the whole task.)
+    2. "category": otherwise the average of the latest sittings in the same category.
+    3. "default": otherwise a plain 30 minutes, because we know nothing yet.
+    """
+    rows = conn.execute(
+        """SELECT sessions.actual_minutes FROM sessions
+           JOIN tasks ON tasks.id = sessions.task_id
+           WHERE lower(trim(tasks.name)) = lower(trim(?))
+           ORDER BY sessions.id DESC LIMIT ?""",
+        (task_name, MEMORY_SITTINGS),
+    ).fetchall()
+    if len(rows) > 0:
+        return _average(rows), "remembered"
+
+    rows = conn.execute(
+        "SELECT actual_minutes FROM sessions WHERE category_id = ? ORDER BY id DESC LIMIT 10",
+        (category_id,),
+    ).fetchall()
+    if len(rows) > 0:
+        return _average(rows), "category"
+
+    return DEFAULT_MINUTES, "default"
+
+
+def _average(rows):
+    total = 0
+    for row in rows:
+        total += row["actual_minutes"]
+    return max(1, round(total / len(rows)))
 
 
 # --- recurring (daily) tasks ------------------------------------------------------------------
@@ -281,6 +388,21 @@ def spawn_recurring(conn, today=None):
         conn.execute("UPDATE recurring SET last_spawned = ? WHERE id = ?", (today, t["id"]))
     conn.commit()
     return len(templates)
+
+
+def reset_all(conn):
+    """Delete EVERYTHING: tasks, daily templates, history and categories, and restart the id counters.
+
+    The order matters: a row that points at another table (sessions -> tasks, tasks -> recurring,
+    all -> categories) must go before the row it points at, or the foreign-key check refuses.
+    sqlite_sequence is the hidden table where AUTOINCREMENT remembers the last id it gave out.
+    """
+    conn.execute("DELETE FROM sessions")
+    conn.execute("DELETE FROM tasks")
+    conn.execute("DELETE FROM recurring")
+    conn.execute("DELETE FROM categories")
+    conn.execute("DELETE FROM sqlite_sequence")
+    conn.commit()
 
 
 # Quick check when run directly:  python backend/db.py
